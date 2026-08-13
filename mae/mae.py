@@ -93,12 +93,12 @@ class MaskedAutoencoderViT(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-        # --------- 小工具：按当前 L 生成 [1, 1+L, C] 的 sin-cos 位置编码 ---------
+        # Build [1, 1+L, C] sinusoidal positions for the current L.
     @staticmethod
     def _build_abs_pos(embed_dim, L, device, dtype, cls_token=True):
         gs = int(math.sqrt(L))
         assert gs * gs == L, f"Token数 {L} 不是完美平方，无法生成方网格位置编码"
-        # mae.pos_embed.get_2d_sincos_pos_embed 返回 numpy；常见是 [1+L, C] 或 [L+1, C]
+        # Returns a NumPy array shaped [1+L, C] or [L+1, C].
         pe_np = get_2d_sincos_pos_embed(embed_dim, gs, cls_token=cls_token)
         pe = torch.from_numpy(pe_np).to(device=device, dtype=dtype)   # [1+L, C]
         if pe.dim() == 2:  # [1+L, C] -> [1, 1+L, C]

@@ -32,9 +32,9 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
     pr_list_px = []
     gt_list_sp = []
     pr_list_sp = []
-    cls_preds = []      # 新增：分类预测
-    cls_labels = []     # 新增：真实标签
-    cls_probs = []      # 新增：分类概率（可选）
+    cls_preds = []      # Class predictions.
+    cls_labels = []     # Ground-truth labels.
+    cls_probs = []      # Optional class probabilities.
     
     gaussian_kernel = get_gaussian_kernel(kernel_size=5, sigma=4).to(device)
     
@@ -42,10 +42,10 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
         for img, gt, label, img_path in tqdm(dataloader, ncols=80):
             img = img.to(device)
             
-            # 前向传播 - 现在返回多任务输出
+            # Forward pass with multitask outputs.
             output = model(img)
             
-            # 异常检测部分
+            # Anomaly detection.
             en, de = output['anomaly_features']
             anomaly_map, _ = cal_anomaly_maps(en, de, img.shape[-1])
             
@@ -73,11 +73,11 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             
             pr_list_sp.append(sp_score)
             
-            # ===== 新增：分类评估部分 =====
+            # Classification evaluation.
             cls_logits = output['cls_logits']
             cls_similarities = output['cls_similarities']
             
-            # 使用分类头输出进行预测
+            # Predict from classification-head output.
             cls_pred = torch.argmax(cls_logits, dim=1)
             cls_proba = F.softmax(cls_logits, dim=1)
             
@@ -85,7 +85,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             cls_labels.extend(label.cpu().numpy())
             cls_probs.extend(cls_proba.cpu().numpy())
         
-        # 异常检测指标计算
+        # Compute anomaly metrics.
         gt_list_px = torch.cat(gt_list_px, dim=0)[:, 0].cpu().numpy()
         pr_list_px = torch.cat(pr_list_px, dim=0)[:, 0].cpu().numpy()
         gt_list_sp = torch.cat(gt_list_sp).flatten().cpu().numpy()
@@ -103,14 +103,14 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
         # f1_sp = f1_score_max(gt_list_sp, pr_list_sp)
         # f1_px = f1_score_max(gt_list_px, pr_list_px)
         
-        # ===== 新增：分类指标计算 =====
+        # Compute classification metrics.
         cls_accuracy = accuracy_score(cls_labels, cls_preds)
         cls_precision = precision_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         cls_recall = recall_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         cls_f1 = f1_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         
-        # 多分类的AUC（需要one-hot编码）
-        if len(np.unique(cls_labels)) > 2:  # 多分类情况
+        # Multiclass AUC requires one-hot labels.
+        if len(np.unique(cls_labels)) > 2:  # Multiclass case.
             try:
                 cls_auc = roc_auc_score(
                     label_binarize(cls_labels, classes=np.unique(cls_labels)),
@@ -118,21 +118,21 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
                     multi_class='ovr'
                 )
             except:
-                cls_auc = 0.0  # 如果计算失败
-        else:  # 二分类情况
+                cls_auc = 0.0  # On failure.
+        else:  # Binary case.
             try:
                 cls_auc = roc_auc_score(cls_labels, cls_probs[:, 1])
             except:
                 cls_auc = 0.0
         
-        # 分类报告（详细信息）
+        # Detailed classification report.
         cls_report = classification_report(cls_labels, cls_preds, output_dict=True, zero_division=0)
         
-        # 混淆矩阵（可选，返回矩阵或主要统计信息）
+        # Optional confusion matrix or summary.
         confusion_mat = confusion_matrix(cls_labels, cls_preds)
 
     return {
-        # 异常检测指标
+        # Anomaly metrics.
         'anomaly': {
             'auroc_sp': auroc_sp,
             'ap_sp': ap_sp, 
@@ -142,7 +142,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             'f1_px': f1_px,
             'aupro_px': aupro_px
         },
-        # 分类指标
+        # Classification metrics.
         'classification': {
             'accuracy': cls_accuracy,
             'precision': cls_precision,
@@ -152,7 +152,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             'confusion_matrix': confusion_mat,
             'detailed_report': cls_report
         },
-        # 原始数据（可选，用于进一步分析）
+        # Optional raw data for further analysis.
         'raw_data': {
             'cls_preds': cls_preds,
             'cls_labels': cls_labels,
@@ -161,13 +161,13 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
     }
 
 
-# 简化版本（如果只需要主要指标）
+# Simplified output with core metrics only.
 def evaluation_batch_simple(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None):
-    """简化版本，只返回主要指标"""
+    """Return core metrics only."""
     results = evaluation_batch_multi_task(model, dataloader, device, _class_, max_ratio, resize_mask)
     
     return [
-        # 异常检测指标（保持原有顺序）
+        # Anomaly metrics in the original order.
         results['anomaly']['auroc_sp'],
         results['anomaly']['ap_sp'],
         results['anomaly']['f1_sp'],
@@ -175,7 +175,7 @@ def evaluation_batch_simple(model, dataloader, device, _class_=None, max_ratio=0
         results['anomaly']['ap_px'],
         results['anomaly']['f1_px'],
         results['anomaly']['aupro_px'],
-        # 分类指标（新增）
+        # Classification metrics.
         results['classification']['accuracy'],
         results['classification']['f1']
     ]
@@ -600,7 +600,7 @@ class WarmCosineScheduler(_LRScheduler):
         else:
             return [self.schedule[self.last_epoch] for base_lr in self.base_lrs]
 
-# 新增多样性损失
+# Diversity loss.
 def diversity_loss(proto_attn_maps, temperature=1.0):
     """Encourage prototypes to attend to different regions"""
     if len(proto_attn_maps) < 2:
@@ -615,7 +615,6 @@ def diversity_loss(proto_attn_maps, temperature=1.0):
             a2 = proto_attn_maps[j].flatten(1)
             # Cosine similarity
             sim = F.cosine_similarity(a1, a2, dim=1).mean()
-            loss -= sim  # 越不相似越好（负相关）
+            loss -= sim  # Lower similarity is better.
             count += 1
     return loss / (count + 1e-8) if count > 0 else 0.0
-

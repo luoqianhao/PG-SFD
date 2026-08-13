@@ -18,7 +18,7 @@ def load_model(args, device):
     model = MultiTaskDinomaly(encoder_name=args.encoder, remove_class_token=True, inp_num=args.INP_num, num_classes=args.num_classes)
     model = model.to(device)
 
-    # 加载权重
+    # Load weights.
     print(f"save_dir: {args.model_dir}, save_name:{args.save_name}")
     model_path = os.path.join(args.model_dir, args.save_name, 'model_epoch_200_Spinal.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
@@ -27,7 +27,7 @@ def load_model(args, device):
     return model
 
 def preprocess_image(image_path, input_size=448, crop_size=392, crop_pix=100):
-    # 和训练代码保持一样的数据预处理
+    # Match the training preprocessing.
     transform = transforms.Compose([
         transforms.Resize((input_size, input_size)),
         transforms.CenterCrop(crop_size),
@@ -57,7 +57,7 @@ def visualize_results(img_tensor, img_orig, anomaly_map, save_path=None, stronge
     # anomaly_map[180:205,200:220] = anomaly_map.min()
     # print("anomaly_map max after: ", anomaly_map.max())
     anomaly_map_max = anomaly_map.max()
-    if anomaly_map_max > 0.01: # 可能是异常值,否则zero
+    if anomaly_map_max > 0.01: # Treat as anomalous; otherwise use zero.
         anomaly_map = (anomaly_map - anomaly_map.min()) / (anomaly_map.max() - anomaly_map.min() + 1e-8)
     else:
         anomaly_map = anomaly_map #np.zeros_like(anomaly_map)
@@ -73,7 +73,7 @@ def visualize_results(img_tensor, img_orig, anomaly_map, save_path=None, stronge
     anomaly_map_show = anomaly_map_jet
     # anomaly_map_show = cv2.cvtColor(anomaly_map_show, cv2.COLOR_BGR2RGB)
     save_amp_path = os.path.dirname(save_path)
-    save_amp_path = os.path.join(save_amp_path,f'{os.path.splitext(save_path)[0]}_amp.png')  #保存热力图
+    save_amp_path = os.path.join(save_amp_path,f'{os.path.splitext(save_path)[0]}_amp.png')  # Save the heatmap.
     print(save_amp_path)
     cv2.imwrite(save_amp_path, anomaly_map_show)
 
@@ -152,14 +152,14 @@ def process_single_image(model, image_path, device, save_dir=None):
         g_loss = outputs['gather_loss']
         cls_logits = outputs['cls_logits']
         
-        # 1. 输出异常结果
+        # 1. Anomaly output.
         anomaly_map, _ = test_global_cosine_hm_percent(en, de)
-        global_score = g_loss.item()  # 或者其他图像级得分
+        global_score = g_loss.item()  # Or another image-level score.
         print(anomaly_map.shape)
         print(f"Global score : {global_score:.4f}")
         # anomaly_map = anomaly_map.squeeze().cpu().numpy()
 
-        # 2. 输出分类结果
+        # 2. Classification output.
         # cls_pred = torch.argmax(cls_logits, dim=-1)
         # strongest_prototype_id, strongest_response = cls_pred.item(), cls_logits[0][cls_pred].item()
         # label_pred = label_mapping[strongest_prototype_id]

@@ -72,15 +72,15 @@ def load_model(args):
         inp_num=args.INP_num,
         num_classes=args.num_classes
     )
-    # 安全加载：先到 CPU
+    # Load safely on the CPU first.
     ckpt = torch.load(args.checkpoint, map_location='cpu')
-    # 如果 checkpoint 是 dict 且包含 'model' 键
+    # Unwrap checkpoints containing a "model" key.
     if isinstance(ckpt, dict) and 'model' in ckpt:
         state_dict = ckpt['model']
     else:
         state_dict = ckpt
 
-    model.load_state_dict(state_dict, strict=False)  # 可加 strict=False 调试
+    model.load_state_dict(state_dict, strict=False)  # Use strict=False for debugging.
     model = model.to(device)
     model.eval()
     return model
@@ -90,10 +90,10 @@ def export_onnx(model,args):
     dummy_input = torch.randn(1, 3, args.crop_size, args.crop_size, dtype=torch.float32).to(device)  
     torch.onnx.export(
         model, 
-        dummy_input,              # 如果多输入，写成 (dummy_img, dummy_mask)
+        dummy_input,              # For multiple inputs, use (dummy_img, dummy_mask).
         args.save_name,
-        input_names=["image"],    # 多输入可以写 ["image", "mask"]
-        output_names = ["en_0","en_1",'de_0','de_1',"gather_loss","cls_logits","cls_similarities","anomaly_prototypes","class_prototypes"],  # 多输出可以写 ["cls", "mask"]
+        input_names=["image"],    # For multiple inputs, use ["image", "mask"].
+        output_names = ["en_0","en_1",'de_0','de_1',"gather_loss","cls_logits","cls_similarities","anomaly_prototypes","class_prototypes"],  # For multiple outputs, use ["cls", "mask"].
         dynamic_axes = {
         "image": {0: "batch"},
         "en_0": {0: "batch"},
@@ -102,7 +102,7 @@ def export_onnx(model,args):
         "de_1": {0: "batch"},
 
     },
-        opset_version=16,         # 建议用较新的 ONNX opset
+        opset_version=16,         # Use a recent ONNX opset.
         do_constant_folding=True,
     )
     print("✅ ONNX 模型已导出: model.onnx")

@@ -21,7 +21,7 @@ class GramLoss(nn.Module):
         super().__init__()
 
         # Loss
-        self.mse_loss = torch.nn.MSELoss()   #均方差损失
+        self.mse_loss = torch.nn.MSELoss()   # Mean-variance loss.
 
         # Parameters
         self.apply_norm = apply_norm

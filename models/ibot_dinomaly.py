@@ -16,7 +16,7 @@ class MultiTaskDinomaly(nn.Module):
             fuse_layer_encoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             fuse_layer_decoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             remove_class_token=False,
-            encoder_require_grad_layer=[10,11],  # encoder中需要微调的层，输入为空的话表示全部冻结
+            encoder_require_grad_layer=[10,11],  # Fine-tune these encoder layers; empty freezes all.
             inp_num=6,
             num_classes=4,
     ) -> None:
@@ -28,7 +28,7 @@ class MultiTaskDinomaly(nn.Module):
         self.remove_class_token = remove_class_token
         self.encoder_require_grad_layer = encoder_require_grad_layer
         
-        # 获取embed_dim和num_heads
+        # Read embed_dim and num_heads.
         if 'small' in encoder_name:
             embed_dim, num_heads = 384, 6
         elif 'base' in encoder_name:
@@ -39,7 +39,7 @@ class MultiTaskDinomaly(nn.Module):
         else:
             raise "Architecture not in small, base, large."
         
-        # 初始化任务模块
+        # Initialize task modules.
         self.anomaly_module = DinomalyDetectionModule(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -56,16 +56,16 @@ class MultiTaskDinomaly(nn.Module):
             num_classes=num_classes
         )
 
-        self.cls_target_layers = [9, 10, 11]  # 只要深层次的特征即可
+        self.cls_target_layers = [9, 10, 11]  # Use only deep features.
         
         if not hasattr(self.encoder, 'num_register_tokens'):
             self.encoder.num_register_tokens = 0
 
     def extract_encoder_features(self, x):
-        """提取编码器特征"""
+        """Extract encoder features."""
         x = self.encoder.prepare_tokens(x)
-        all_encoder_features = []  # 存储所有encoder层的特征,筛选下放到子任务中进行
-        finetune_layers = set(self.encoder_require_grad_layer or [])  # 例如 {9,10,11}
+        all_encoder_features = []  # Retain all encoder features; each branch selects its layers.
+        finetune_layers = set(self.encoder_require_grad_layer or [])  # Example: {9, 10, 11}.
         for i, blk in enumerate(self.encoder.blocks):
             if len(finetune_layers)==0 or i not in finetune_layers:
                 with torch.no_grad():
@@ -77,20 +77,20 @@ class MultiTaskDinomaly(nn.Module):
         return all_encoder_features
 
     def forward(self, x, labels=None):
-        # 提取编码器特征
+        # Extract encoder features.
         all_encoder_features = self.extract_encoder_features(x)
         
-        # 异常检测任务
+        # Anomaly detection branch.
         anomaly_features = [all_encoder_features[i] for i in self.target_layers]
         en, de, gather_loss, anomaly_prototypes = self.anomaly_module(
             anomaly_features, self.encoder.num_register_tokens
         )
         
-        # 分类任务
+        # Classification branch.
         cls_features = [all_encoder_features[i] for i in self.cls_target_layers]
 
         cls_logits, cls_similarities, class_prototypes = self.classification_module(
-            cls_features, anomaly_prototypes,  # 传入异常原型
+            cls_features, anomaly_prototypes,  # Pass anomaly prototypes.
             self.encoder.num_register_tokens, self.remove_class_token
         )
         
@@ -112,7 +112,7 @@ class MultiTaskDinov3maly(nn.Module):
             fuse_layer_encoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             fuse_layer_decoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             remove_class_token=False,
-            encoder_require_grad_layer=[],  # encoder中需要微调的层，输入为空的话表示全部冻结
+            encoder_require_grad_layer=[],  # Fine-tune these encoder layers; empty freezes all.
             inp_num=6,
             num_classes=4,
     ) -> None:
@@ -125,7 +125,7 @@ class MultiTaskDinov3maly(nn.Module):
         self.encoder_require_grad_layer = encoder_require_grad_layer
         self.do_norm = True
         
-        # 获取embed_dim和num_heads
+        # Read embed_dim and num_heads.
         if 's' in encoder_name:
             embed_dim, num_heads = 384, 6
         elif 'b' in encoder_name:
@@ -136,7 +136,7 @@ class MultiTaskDinov3maly(nn.Module):
         else:
             raise "Architecture not in small, base, large."
         
-        # 初始化任务模块
+        # Initialize task modules.
         self.anomaly_module = DinomalyDetectionModule(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -153,7 +153,7 @@ class MultiTaskDinov3maly(nn.Module):
             num_classes=num_classes
         )
 
-        self.cls_target_layers = [9, 10, 11]  # 只要深层次的特征即可
+        self.cls_target_layers = [9, 10, 11]  # Use only deep features.
         
         if hasattr(self.encoder, 'n_storage_tokens'):
             self.encoder.num_register_tokens = int(self.encoder.n_storage_tokens)
@@ -161,7 +161,7 @@ class MultiTaskDinov3maly(nn.Module):
             self.encoder.num_register_tokens = 0
 
     def extract_encoder_features(self, x):
-        """提取编码器特征"""
+        """Extract encoder features."""
         layers_to_take = list(range(self.encoder.n_blocks))
         with torch.no_grad():
             x, (H, W) = self.encoder.prepare_tokens_with_masks(x)
@@ -175,25 +175,25 @@ class MultiTaskDinov3maly(nn.Module):
                 x = blk(x, rope_sincos)
                 if i in blocks_to_take:
                     outputs.append(x)
-            all_encoder_features = outputs # 存储所有encoder层的特征,筛选下放到子任务中进行
+            all_encoder_features = outputs # Retain all encoder features; each branch selects its layers.
         
         return all_encoder_features
 
     def forward(self, x):
-        # 提取编码器特征
+        # Extract encoder features.
         all_encoder_features = self.extract_encoder_features(x)
         
-        # 异常检测任务
+        # Anomaly detection branch.
         anomaly_features = [all_encoder_features[i] for i in self.target_layers]
         en, de, gather_loss, anomaly_prototypes = self.anomaly_module(
             anomaly_features, self.encoder.num_register_tokens
         )
         
-        # 分类任务
+        # Classification branch.
         cls_features = [all_encoder_features[i] for i in self.cls_target_layers]
 
         cls_logits, cls_similarities, class_prototypes = self.classification_module(
-            cls_features, anomaly_prototypes,  # 传入异常原型
+            cls_features, anomaly_prototypes,  # Pass anomaly prototypes.
             self.encoder.num_register_tokens, self.remove_class_token
         )
         
@@ -214,7 +214,7 @@ class MultiTaskMAEmaly(nn.Module):
             fuse_layer_encoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             fuse_layer_decoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             remove_class_token=False,
-            encoder_require_grad_layer=[],  # encoder中需要微调的层，输入为空的话表示全部冻结
+            encoder_require_grad_layer=[],  # Fine-tune these encoder layers; empty freezes all.
             inp_num=6,
             num_classes=4,
     ) -> None:
@@ -227,7 +227,7 @@ class MultiTaskMAEmaly(nn.Module):
         self.encoder_require_grad_layer = encoder_require_grad_layer
         self.do_norm = True
         
-        # 获取embed_dim和num_heads
+        # Read embed_dim and num_heads.
         if 'small' in encoder_name:
             embed_dim, num_heads = 384, 6
         elif 'base' in encoder_name:
@@ -238,7 +238,7 @@ class MultiTaskMAEmaly(nn.Module):
         else:
             raise "Architecture not in small, base, large."
         
-        # 初始化任务模块
+        # Initialize task modules.
         self.anomaly_module = DinomalyDetectionModule(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -255,7 +255,7 @@ class MultiTaskMAEmaly(nn.Module):
             num_classes=num_classes
         )
 
-        self.cls_target_layers = [9, 10, 11]  # 只要深层次的特征即可
+        self.cls_target_layers = [9, 10, 11]  # Use only deep features.
         
         if hasattr(self.encoder, 'n_storage_tokens'):
             self.encoder.num_register_tokens = int(self.encoder.n_storage_tokens)
@@ -263,31 +263,31 @@ class MultiTaskMAEmaly(nn.Module):
             self.encoder.num_register_tokens = 0
 
     def extract_encoder_features(self, x):
-        """提取编码器特征"""
+        """Extract encoder features."""
         all_encoder_features = []
         x = self.encoder.forward_encoder_only(x)
         with torch.no_grad():
             for blk in self.encoder.blocks:
                 x = blk(x)  
-                all_encoder_features.append(x) # 存储所有encoder层的特征,筛选下放到子任务中进行
+                all_encoder_features.append(x) # Retain all encoder features; each branch selects its layers.
         
         return all_encoder_features
 
     def forward(self, x):
-        # 提取编码器特征
+        # Extract encoder features.
         all_encoder_features = self.extract_encoder_features(x)
         
-        # 异常检测任务
+        # Anomaly detection branch.
         anomaly_features = [all_encoder_features[i] for i in self.target_layers]
         en, de, gather_loss, anomaly_prototypes = self.anomaly_module(
             anomaly_features, self.encoder.num_register_tokens
         )
         
-        # 分类任务
+        # Classification branch.
         cls_features = [all_encoder_features[i] for i in self.cls_target_layers]
 
         cls_logits, cls_similarities, class_prototypes = self.classification_module(
-            cls_features, anomaly_prototypes,  # 传入异常原型
+            cls_features, anomaly_prototypes,  # Pass anomaly prototypes.
             self.encoder.num_register_tokens, self.remove_class_token
         )
         
@@ -308,7 +308,7 @@ class MultiTaskIBOTmaly(nn.Module):
             fuse_layer_encoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             fuse_layer_decoder=[[0, 1, 2, 3], [4, 5, 6, 7]],
             remove_class_token=False,
-            encoder_require_grad_layer=[],  # encoder中需要微调的层，输入为空的话表示全部冻结
+            encoder_require_grad_layer=[],  # Fine-tune these encoder layers; empty freezes all.
             inp_num=6,
             num_classes=4,
     ) -> None:
@@ -321,7 +321,7 @@ class MultiTaskIBOTmaly(nn.Module):
         self.encoder_require_grad_layer = encoder_require_grad_layer
         self.do_norm = True
         
-        # 获取embed_dim和num_heads
+        # Read embed_dim and num_heads.
         if 'small' in encoder_name:
             embed_dim, num_heads = 384, 6
         elif 'base' in encoder_name:
@@ -332,7 +332,7 @@ class MultiTaskIBOTmaly(nn.Module):
         else:
             raise "Architecture not in small, base, large."
         
-        # 初始化任务模块
+        # Initialize task modules.
         self.anomaly_module = DinomalyDetectionModule(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -349,7 +349,7 @@ class MultiTaskIBOTmaly(nn.Module):
             num_classes=num_classes
         )
 
-        self.cls_target_layers = [9, 10, 11]  # 只要深层次的特征即可
+        self.cls_target_layers = [9, 10, 11]  # Use only deep features.
         
         if hasattr(self.encoder, 'n_storage_tokens'):
             self.encoder.num_register_tokens = int(self.encoder.n_storage_tokens)
@@ -357,7 +357,7 @@ class MultiTaskIBOTmaly(nn.Module):
             self.encoder.num_register_tokens = 0
 
     def extract_encoder_features(self, x):
-        """提取编码器特征"""
+        """Extract encoder features."""
         all_encoder_features = []
         x = self.encoder.prepare_tokens(x)
         with torch.no_grad():
@@ -368,20 +368,20 @@ class MultiTaskIBOTmaly(nn.Module):
         return all_encoder_features
 
     def forward(self, x):
-        # 提取编码器特征
+        # Extract encoder features.
         all_encoder_features = self.extract_encoder_features(x)
         
-        # 异常检测任务
+        # Anomaly detection branch.
         anomaly_features = [all_encoder_features[i] for i in self.target_layers]
         en, de, gather_loss, anomaly_prototypes = self.anomaly_module(
             anomaly_features, self.encoder.num_register_tokens
         )
         
-        # 分类任务
+        # Classification branch.
         cls_features = [all_encoder_features[i] for i in self.cls_target_layers]
 
         cls_logits, cls_similarities, class_prototypes = self.classification_module(
-            cls_features, anomaly_prototypes,  # 传入异常原型
+            cls_features, anomaly_prototypes,  # Pass anomaly prototypes.
             self.encoder.num_register_tokens, self.remove_class_token
         )
         

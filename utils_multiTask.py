@@ -34,10 +34,10 @@ def save_pap_inputs_images(pr_px: np.ndarray,
                            save_heatmap: bool = True,
                            make_pair: bool = True):
     """
-    将用于计算 P-AP 的 pr_px (N,H,W) 与 gt_px (N,H,W) 保存为图片。
-    - pr：保存灰度图 + 可选JET热力图
-    - gt：保存二值mask灰度图
-    - pair：左右拼接（左pr热力/灰度，右gt）
+    Save pr_px and gt_px images used to compute P-AP.
+    - pr: grayscale and optional JET heatmap
+    - gt: binary mask
+    - pair: prediction on the left, GT on the right
     """
     os.makedirs(save_dir, exist_ok=True)
     N = pr_px.shape[0]
@@ -49,19 +49,19 @@ def save_pap_inputs_images(pr_px: np.ndarray,
     for i in range(N):
         name = names[i]
         pred = pr_px[i]       # (H,W), float
-        gt   = gt_px[i]       # (H,W), {0,1}或float
+        gt   = gt_px[i]       # (H, W), binary or float.
 
-        # 预测图归一化到 0-255（逐图 min-max）
+        # Min-max normalize each prediction to 0-255.
         pmin, pmax = float(pred.min()), float(pred.max())
         if pmax > pmin:
             pred8 = ((pred - pmin) / (pmax - pmin) * 255.0).astype(np.uint8)
         else:
             pred8 = np.zeros_like(pred, dtype=np.uint8)
 
-        # GT 二值到 0/255
+        # Scale binary GT to 0-255.
         gt8 = ((gt > 0.5).astype(np.uint8) * 255)
 
-        # 单图保存
+        # Save one image.
         pr_gray_path = os.path.join(save_dir, f"{i:06d}_{name}_pr.png")
         cv2.imwrite(pr_gray_path, pred8)
 
@@ -75,7 +75,7 @@ def save_pap_inputs_images(pr_px: np.ndarray,
         gt_path = os.path.join(save_dir, f"{i:06d}_{name}_gt.png")
         cv2.imwrite(gt_path, gt8)
 
-        # 拼接对比（左：pr，右：gt）
+        # Concatenate prediction left and GT right.
         if make_pair:
             left  = pr_jet
             right = cv2.cvtColor(gt8, cv2.COLOR_GRAY2BGR)
@@ -84,8 +84,8 @@ def save_pap_inputs_images(pr_px: np.ndarray,
             cv2.imwrite(pair_path, pair)
 
 def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None,
-                                save_px_vis_dir: str | None = None,  # 新增：保存目录（可选）
-                                save_px_limit: int | None = None):     # 新增：最多保存多少张（可选）):
+                                save_px_vis_dir: str | None = None,  # Optional output directory.
+                                save_px_limit: int | None = None):     # Optional image-save limit.
     model.eval()
     gt_list_px = []
     pr_list_px = []
@@ -95,7 +95,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
     cls_labels = []
     cls_probs = []
 
-    img_name_list = []  # 新增：记录每张图的名字，便于保存时命名
+    img_name_list = []  # Record image names for saved outputs.
 
     gaussian_kernel = get_gaussian_kernel(kernel_size=5, sigma=4).to(device)
     
@@ -104,14 +104,14 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             img = img.to(device)
             label = label.to(device)
 
-            # 记录文件名（去后缀）
+            # Record the filename stem.
             names = [os.path.splitext(os.path.basename(p))[0] for p in img_path]
             img_name_list.extend(names)
             
-            # 前向传播
+            # Forward pass.
             output = model(img)
             
-            # 异常检测部分
+            # Anomaly detection.
             en, de = output['anomaly_features']
             anomaly_map, _ = cal_anomaly_maps(en, de, img.shape[-1])
             
@@ -139,7 +139,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             
             pr_list_sp.append(sp_score)
             
-            # 分类评估部分
+            # Classification evaluation.
             cls_logits = output['cls_logits']
             cls_similarities = output['cls_similarities']
             
@@ -150,13 +150,13 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             cls_labels.extend(label.cpu().numpy())
             cls_probs.extend(cls_proba.cpu().numpy())
         
-        # 异常检测指标计算
+        # Compute anomaly metrics.
         gt_list_px = torch.cat(gt_list_px, dim=0)[:, 0].cpu().numpy()
         pr_list_px = torch.cat(pr_list_px, dim=0)[:, 0].cpu().numpy()
         gt_list_sp = torch.cat(gt_list_sp).flatten().cpu().numpy()
         pr_list_sp = torch.cat(pr_list_sp).flatten().cpu().numpy()
         
-         # ====== 在这里落盘用于 P-AP 的输入对 ======
+         # Save P-AP input pairs here.
         if save_px_vis_dir is not None:
             try:
                 save_pap_inputs_images(
@@ -172,19 +172,19 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             except Exception as e:
                 print(f"[警告] 保存 P-AP 可视化失败：{e}")
         
-        # 异常检测评估
+        # Anomaly evaluation.
         auroc_sp, ap_sp, f1_sp, auroc_px, ap_px, f1_px, aupro_px = ader_evaluator(pr_list_px, pr_list_sp, gt_list_px, gt_list_sp)
         
-        # 分类指标计算
+        # Compute classification metrics.
         cls_accuracy = accuracy_score(cls_labels, cls_preds)
         cls_precision = precision_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         cls_recall = recall_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         cls_f1 = f1_score(cls_labels, cls_preds, average='weighted', zero_division=0)
         
-        # 多分类的AUC
+        # Multiclass AUC.
         if len(np.unique(cls_labels)) > 2:
             try:
-                # 将标签转换为one-hot编码
+                # One-hot encode labels.
                 unique_classes = np.unique(cls_labels)
                 cls_auc = roc_auc_score(
                     label_binarize(cls_labels, classes=unique_classes),
@@ -199,7 +199,7 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
             except:
                 cls_auc = 0.0
         
-        # 分类报告和混淆矩阵
+        # Classification report and confusion matrix.
         cls_report = classification_report(cls_labels, cls_preds, output_dict=True, zero_division=0)
         confusion_mat = confusion_matrix(cls_labels, cls_preds)
 
@@ -230,15 +230,15 @@ def evaluation_batch_multi_task(model, dataloader, device, _class_=None, max_rat
     }
 
 
-# 简化版本（如果只需要主要指标）
+# Simplified output with core metrics only.
 def evaluation_batch_simple(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None,
                               save_px_vis_dir: str | None = None, save_px_limit: int | None = None):
-    """简化版本，只返回主要指标"""
+    """Return core metrics only."""
     results = evaluation_batch_multi_task(model, dataloader, device, _class_, max_ratio, resize_mask,
                                           save_px_vis_dir=save_px_vis_dir, save_px_limit=save_px_limit)
     
     return [
-        # 异常检测指标（保持原有顺序）
+        # Anomaly metrics in the original order.
         results['anomaly']['auroc_sp'],
         results['anomaly']['ap_sp'],
         results['anomaly']['f1_sp'],
@@ -246,14 +246,14 @@ def evaluation_batch_simple(model, dataloader, device, _class_=None, max_ratio=0
         results['anomaly']['ap_px'],
         results['anomaly']['f1_px'],
         results['anomaly']['aupro_px'],
-        # 分类指标（新增）
+        # Classification metrics.
         results['classification']['accuracy'],
         results['classification']['f1']
     ]
 
 # #=====debug====
 # def _stable_rank_scores(x: np.ndarray, seed: int = 1) -> np.ndarray:
-#     # x: 1D float，返回加了极小抖动的副本（不改变 AUC/AP 的“宏观”排序，但打破 ties）
+#     # Add tiny jitter to a 1D float array to break ties without materially changing AUC/AP.
 #     rng = np.random.default_rng(seed)
 #     eps = rng.standard_normal(x.size).astype(np.float64) * 1e-12
 #     y = x.astype(np.float64, copy=True)
@@ -280,7 +280,7 @@ def ader_evaluator(pr_px, pr_sp, gt_px, gt_sp, use_metrics=['I-AUROC', 'I-AP', '
     metrics = accum.summary()
     metric_results = {}
     
-    # 检查是多分类还是二分类
+    # Detect binary or multiclass labels.
     is_multiclass = len(np.unique(gt_sp)) > 2
     
     # #====debug===
@@ -291,24 +291,24 @@ def ader_evaluator(pr_px, pr_sp, gt_px, gt_sp, use_metrics=['I-AUROC', 'I-AP', '
     for metric in use_metrics:
         if metric.startswith('I-AUROC'):
             if is_multiclass:
-                # 对于多分类但只有异常分数的情况，我们需要特殊处理
-                # 将异常检测视为二分类问题（正常 vs 异常）
-                # 或者使用其他适合的评估方式
+                # Handle multiclass labels with a single anomaly score.
+                # Treat anomaly detection as normal vs. anomalous.
+                # Or use another suitable evaluation.
                 try:
-                    # 方法1：将多分类转换为二分类（正常=0，异常=1）
+                    # Method 1: map multiclass labels to normal=0 and anomalous=1.
                     binary_gt = (gt_sp > 0).astype(int)
                     auroc_sp = roc_auc_score(binary_gt, pr_sp)
                 except:
                     auroc_sp = 0.0
             else:
-                # 二分类
+                # Binary classification.
                 auroc_sp = roc_auc_score(gt_sp, pr_sp)
             metric_results[metric] = auroc_sp
             
         elif metric.startswith('I-AP'):
             if is_multiclass:
                 try:
-                    # 同样将多分类转换为二分类
+                    # Convert multiclass labels to binary.
                     binary_gt = (gt_sp > 0).astype(int)
                     ap_sp = average_precision_score(binary_gt, pr_sp)
                 except:
@@ -486,8 +486,8 @@ def denormalize(img):
 
 
 def evaluation_batch(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None,
-                    save_px_vis_dir: str | None = None,  # 新增：保存目录（可选）
-                    save_px_limit: int | None = None):     # 新增：最多保存多少张（可选）)
+                    save_px_vis_dir: str | None = None,  # Optional output directory.
+                    save_px_limit: int | None = None):     # Optional image-save limit.
     model.eval()
     gt_list_px = []
     pr_list_px = []
@@ -501,7 +501,7 @@ def evaluation_batch(model, dataloader, device, _class_=None, max_ratio=0, resiz
         for img, gt, label, img_path in tqdm(dataloader, ncols=80):
             img = img.to(device)
 
-            # 记录文件名（去后缀）
+            # Record the filename stem.
             names = [os.path.splitext(os.path.basename(p))[0] for p in img_path]
             img_name_list.extend(names)
             
@@ -532,7 +532,7 @@ def evaluation_batch(model, dataloader, device, _class_=None, max_ratio=0, resiz
         gt_list_sp = torch.cat(gt_list_sp).flatten().cpu().numpy()
         pr_list_sp = torch.cat(pr_list_sp).flatten().cpu().numpy()
 
-         # ====== 在这里落盘用于 P-AP 的输入对 ======
+         # Save P-AP input pairs here.
         if save_px_vis_dir is not None:
             try:
                 save_pap_inputs_images(
@@ -670,7 +670,7 @@ class WarmCosineScheduler(_LRScheduler):
         else:
             return [self.schedule[self.last_epoch] for base_lr in self.base_lrs]
 
-# 新增多样性损失
+# Diversity loss.
 def diversity_loss(proto_attn_maps, temperature=1.0):
     """Encourage prototypes to attend to different regions"""
     if len(proto_attn_maps) < 2:
@@ -685,7 +685,6 @@ def diversity_loss(proto_attn_maps, temperature=1.0):
             a2 = proto_attn_maps[j].flatten(1)
             # Cosine similarity
             sim = F.cosine_similarity(a1, a2, dim=1).mean()
-            loss -= sim  # 越不相似越好（负相关）
+            loss -= sim  # Lower similarity is better.
             count += 1
     return loss / (count + 1e-8) if count > 0 else 0.0
-

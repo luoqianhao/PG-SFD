@@ -3,8 +3,6 @@ import timm
 from torch.hub import HASH_REGEX, download_url_to_file, urlparse
 from dinov1 import vision_transformer
 from dinov2.models import vision_transformer as vision_transformer_dinov2
-from dinov3.models import vision_transformer as vision_transformer_dinov3
-from ibot.models import vision_transformer as vision_transformer_ibot
 from deit.vision_transformer import deit_small_patch16_LS
 from mae.mae import mae_vit_base_patch16_dec512d8b
 import timm
@@ -107,6 +105,8 @@ def load(name):
         state_dict = torch.load(ckpt_pth, map_location='cpu')['model']
 
     if "ibot" in name:
+        from ibot.models import vision_transformer as vision_transformer_ibot
+
         if 'small' in name:
             model = vision_transformer_ibot.vit_small()
         ckpt_pth = "./ibot/models/weight/checkpoint_teacher.pth"
@@ -159,12 +159,16 @@ def load(name):
     #         state_dict = torch.load(f"{_WEIGHTS_DIR}/vit_{arch}_patchsize_{patchsize}_224.pth")
     
     ret = model.load_state_dict(state_dict, strict=False)
-    print("Missing keys:\n", ret.missing_keys)       # 模型里有参数，但权重里没有
-    print("Unexpected keys:\n", ret.unexpected_keys) # 权重里有参数，但模型里没有
+    print("Missing keys:\n", ret.missing_keys)       # Model parameters missing from the checkpoint.
+    print("Unexpected keys:\n", ret.unexpected_keys) # Checkpoint parameters missing from the model.
     print('encoder model: ',model)
     return model
 
 def load_dinov3(name):
+    # DINOv3 requires a newer PyTorch surface than the paper's DINOv2 path.
+    # Import it only when that optional backbone is explicitly requested.
+    from dinov3.models import vision_transformer as vision_transformer_dinov3
+
     # DINOv3 ViT models 
     patchsize = 16 
     if 'vits16' in name:
@@ -181,10 +185,10 @@ def load_dinov3(name):
     state_dict = torch.load(ckpt_pth, map_location='cpu')
     
     # model.load_state_dict(state_dict, strict=True)
-    ret = model.load_state_dict(state_dict, strict=False)  # strict=False 才会返回不匹配列表而不是报错
+    ret = model.load_state_dict(state_dict, strict=False)  # strict=False reports mismatches instead of raising.
 
-    # print("Missing keys:\n", ret.missing_keys)       # 模型里有参数，但权重里没有
-    # print("Unexpected keys:\n", ret.unexpected_keys) # 权重里有参数，但模型里没有
+    # print("Missing keys:\n", ret.missing_keys)       # Model parameters missing from the checkpoint.
+    # print("Unexpected keys:\n", ret.unexpected_keys) # Checkpoint parameters missing from the model.
     # print('encoder model: ',model)
     return model
 
@@ -199,6 +203,16 @@ def download_cached_file(url, check_hash=True, progress=True):
     else:
         parts = urlparse(url)
         filename = os.path.basename(parts.path)
+    repository_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    provided_checkpoints = (
+        os.path.join(repository_root, "checkpoints", filename),
+        # PG-SFD_new may share the already-provisioned weights with its parent
+        # checkout. A repository-local checkpoint always has priority.
+        os.path.join(os.path.dirname(repository_root), "checkpoints", filename),
+    )
+    for provided_checkpoint in provided_checkpoints:
+        if os.path.isfile(provided_checkpoint):
+            return provided_checkpoint
     cached_file = os.path.join(_WEIGHTS_DIR, filename)
     if not os.path.exists(cached_file):
         _logger.info('Downloading: "{}" to {}\n'.format(url, cached_file))

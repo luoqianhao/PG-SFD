@@ -169,7 +169,7 @@ class Prototype_Block(nn.Module):
         else:
             return x
 
-# 下面是从dinomaly拷过来的
+# Adapted from Dinomaly.
 
 class DropKey(nn.Module):
     """DropKey
@@ -274,4 +274,3 @@ class LinearAttention2(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x, kv
-

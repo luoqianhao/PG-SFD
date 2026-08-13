@@ -8,7 +8,7 @@ from functools import partial
 from models import vit_encoder
 from models.vision_transformer import Mlp, Aggregation_Block, Prototype_Block
 
-# 复刻inpformer异常检测
+# Reproduce InPFormer's anomaly detector.
 class AnomalyDetectionModule(nn.Module):
     def __init__(self, embed_dim, num_heads, inp_num, target_layers, 
                  fuse_layer_encoder, fuse_layer_decoder, remove_class_token=False):
@@ -20,10 +20,10 @@ class AnomalyDetectionModule(nn.Module):
         self.fuse_layer_decoder = fuse_layer_decoder
         self.remove_class_token = remove_class_token
         
-        # 异常检测原型
+        # Anomaly prototypes.
         self.anomaly_prototypes = nn.Parameter(torch.randn(inp_num, embed_dim))
         
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -35,14 +35,14 @@ class AnomalyDetectionModule(nn.Module):
             Mlp(embed_dim, embed_dim * 4, embed_dim, drop=0.)
         ])
         
-        # 解码器
+        # Decoder.
         self.decoder = nn.ModuleList([
             Prototype_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                           qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
             for _ in range(8)
         ])
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.GELU(),
@@ -69,30 +69,30 @@ class AnomalyDetectionModule(nn.Module):
             en_list_processed = en_list
         
         
-        # 特征融合
+        # Fuse features.
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # 原型聚合
+        # Aggregate prototypes.
         agg_prototype = self.anomaly_prototypes
         for blk in self.aggregation:
             agg_prototype = blk(agg_prototype.unsqueeze(0).repeat((B, 1, 1)), adapted_features)
         
         gather_loss = self.gather_loss(adapted_features, agg_prototype)
         
-        # Bottleneck处理
+        # Bottleneck.
         bottleneck_features = adapted_features
         for blk in self.bottleneck:
             bottleneck_features = blk(bottleneck_features)
         
-        # 解码器
+        # Decoder.
         de_list = []
         for blk in self.decoder:
             bottleneck_features = blk(bottleneck_features, agg_prototype)
             de_list.append(bottleneck_features)
         de_list = de_list[::-1]
         
-        # 特征重构
+        # Reconstruct features.
         en = [self.fuse_feature([en_list_processed[idx] for idx in idxs]) for idxs in self.fuse_layer_encoder]
         de = [self.fuse_feature([de_list[idx] for idx in idxs]) for idxs in self.fuse_layer_decoder]
 
@@ -100,7 +100,7 @@ class AnomalyDetectionModule(nn.Module):
             en = [e[:, 1 + encoder_num_register_tokens:, :] for e in en]
             de = [d[:, 1 + encoder_num_register_tokens:, :] for d in de]
         
-        # 恢复空间结构
+        # Restore spatial layout.
         en = [e.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for e in en]
         de = [d.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for d in de]
         
@@ -113,13 +113,13 @@ class ClassificationModule(nn.Module):
         self.num_heads = num_heads
         self.num_classes = num_classes
         
-        # 分类原型
+        # Class prototypes.
         self.class_prototypes = nn.Parameter(torch.randn(num_classes, embed_dim))
 
-        # 差分增强模块【todo】
+        # Difference enhancement module (TODO).
         # self.differential_enhance = DifferentialEnhancement_v1_Block(embed_dim)
         
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -136,14 +136,14 @@ class ClassificationModule(nn.Module):
             nn.Sigmoid()
         )
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim // 2),
             nn.GELU(),
             nn.Linear(embed_dim // 2, embed_dim)
         )
         
-        # 分类头
+        # Classification head.
         self.classification_head = nn.Sequential(
             nn.LayerNorm(embed_dim),
             nn.Linear(embed_dim, embed_dim // 2),
@@ -152,59 +152,59 @@ class ClassificationModule(nn.Module):
             nn.Linear(embed_dim // 2, num_classes)
         )
         
-        # 自定义初始化函数
+        # Custom initialization.
         def init_weights(m):
             if isinstance(m, nn.Linear):
-                if m.out_features == self.num_classes:  # 检查是否为最后一层
-                    nn.init.normal_(m.weight, std=2.0)  # 使用更大的标准差初始化
+                if m.out_features == self.num_classes:  # Check for the final layer.
+                    nn.init.normal_(m.weight, std=2.0)  # Initialize with a larger standard deviation.
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
 
-        # 应用初始化到分类头的最后一层
+        # Initialize the final classification layer.
         self.classification_head[-1].apply(init_weights)
 
     def fuse_feature(self, feat_list):
         return torch.stack(feat_list, dim=1).mean(dim=1)
 
     def forward(self, en_list, anomaly_prototypes=None, encoder_num_register_tokens=0, remove_class_token=False):
-        # 特征处理
+        # Process features.
         if remove_class_token:
             en_list_processed = [e[:, 1 + encoder_num_register_tokens:, :] for e in en_list]
         else:
-            en_list_processed = en_list   #9,10,11层feature
+            en_list_processed = en_list   # Features from layers 9, 10, and 11.
         
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # Bottleneck处理
+        # Bottleneck.
         for blk in self.bottleneck:
             adapted_features = blk(adapted_features)
         
-        # 差分增强
+        # Difference enhancement.
         if anomaly_prototypes is not None:
-            # 使用 anomaly_module 学到的正常原型作为参考
-            p_normal_AD = anomaly_prototypes.mean(1)  # [B, D], 来自无监督学习
+            # Use the normal prototype learned by anomaly_module.
+            p_normal_AD = anomaly_prototypes.mean(1)  # [B, D], learned without supervision.
             p_normal_AD = p_normal_AD.unsqueeze(1)  # [B, 1, D]，
-            f_diff = adapted_features - p_normal_AD   # 偏离“无监督正常”的程度
+            f_diff = adapted_features - p_normal_AD   # Distance from the learned normal pattern.
             gate = self.gate(torch.cat([adapted_features, f_diff], dim=-1))
-            adapted_features = adapted_features + gate * f_diff  # 增强特征
+            adapted_features = adapted_features + gate * f_diff  # Enhance features.
             
-        # 原型聚合
+        # Aggregate prototypes.
         B = adapted_features.shape[0]
         class_proto = self.class_prototypes
         for blk in self.aggregation:
             class_proto = blk(class_proto.unsqueeze(0).repeat((B, 1, 1)), adapted_features)
         
-        # 全局特征提取
+        # Extract global features.
         if remove_class_token:
             global_feature = adapted_features.mean(dim=1)
         else:
             global_feature = adapted_features[:, 0, :]
         
-        # 分类输出
+        # Classification output.
         cls_logits = self.classification_head(global_feature)
         
-        # 原型相似度
+        # Prototype similarity.
         cls_similarities = F.cosine_similarity(
             global_feature.unsqueeze(1),
             class_proto.unsqueeze(0),
@@ -221,13 +221,13 @@ class ClassificationModule_v2(nn.Module):
         self.num_heads = num_heads
         self.num_classes = num_classes
         
-        # 分类原型
+        # Class prototypes.
         self.class_prototypes = nn.Parameter(torch.randn(num_classes, embed_dim))
 
-        # 差分增强模块【todo】
+        # Difference enhancement module (TODO).
         # self.differential_enhance = DifferentialEnhancement_v1_Block(embed_dim)
         
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -243,14 +243,14 @@ class ClassificationModule_v2(nn.Module):
             nn.Sigmoid()
         )
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim // 2),
             nn.GELU(),
             nn.Linear(embed_dim // 2, embed_dim)
         )
         
-        # 分类头
+        # Classification head.
         # self.classification_head = nn.Sequential(
         #     nn.LayerNorm(embed_dim),
         #     nn.Linear(embed_dim, embed_dim // 2),
@@ -258,64 +258,64 @@ class ClassificationModule_v2(nn.Module):
         #     nn.Dropout(0.3),
         #     nn.Linear(embed_dim // 2, num_classes)
         # )
-        self.scale = nn.Parameter(torch.tensor(temperature_init))  # 类似 ArcFace 中的 s
+        self.scale = nn.Parameter(torch.tensor(temperature_init))  # Analogous to ArcFace scale s.
         self.norm = nn.LayerNorm(embed_dim)
         
-        # # 自定义初始化函数
+        # # Custom initialization.
         # def init_weights(m):
         #     if isinstance(m, nn.Linear):
-        #         if m.out_features == self.num_classes:  # 检查是否为最后一层
-        #             nn.init.normal_(m.weight, std=2.0)  # 使用更大的标准差初始化
+        #         if m.out_features == self.num_classes:  # Check for the final layer.
+        #             nn.init.normal_(m.weight, std=2.0)  # Use a larger standard deviation.
         #             if m.bias is not None:
         #                 nn.init.constant_(m.bias, 0)
 
-        # # 应用初始化到分类头的最后一层
+        # # Initialize the final classification layer.
         # self.classification_head[-1].apply(init_weights)
 
     def fuse_feature(self, feat_list):
         return torch.stack(feat_list, dim=1).mean(dim=1)
 
     def forward(self, en_list, anomaly_prototypes=None, encoder_num_register_tokens=0, remove_class_token=False):
-        # 特征处理
+        # Process features.
         if remove_class_token:
             en_list_processed = [e[:, 1 + encoder_num_register_tokens:, :] for e in en_list]
         else:
-            en_list_processed = en_list   #9,10,11层feature
+            en_list_processed = en_list   # Features from layers 9, 10, and 11.
         
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # Bottleneck处理
+        # Bottleneck.
         adapted_features = self.bottleneck(adapted_features)
         
-        # 差分增强
+        # Difference enhancement.
         if anomaly_prototypes is not None:
-            # 使用 anomaly_module 学到的正常原型作为参考
-            p_normal_AD = anomaly_prototypes.mean(1)  # [B, D], 来自无监督学习
+            # Use the normal prototype learned by anomaly_module.
+            p_normal_AD = anomaly_prototypes.mean(1)  # [B, D], learned without supervision.
             p_normal_AD = p_normal_AD.unsqueeze(1)  # [B, 1, D]，
-            f_diff = adapted_features - p_normal_AD   # 偏离“无监督正常”的程度
+            f_diff = adapted_features - p_normal_AD   # Distance from the learned normal pattern.
             gate = self.gate(torch.cat([adapted_features, f_diff], dim=-1))
-            adapted_features = adapted_features + gate * f_diff  # 增强特征
+            adapted_features = adapted_features + gate * f_diff  # Enhance features.
             
-        # 原型聚合
+        # Aggregate prototypes.
         B = adapted_features.shape[0]
         class_proto = self.class_prototypes
         for blk in self.aggregation:
             class_proto = blk(class_proto.unsqueeze(0).expand((B, -1, -1)), adapted_features)
         
-        # 全局特征提取
+        # Extract global features.
         if remove_class_token:
             global_feature = adapted_features.mean(dim=1)
         else:
             global_feature = adapted_features[:, 0, :]
         
-        # 分类输出
+        # Classification output.
         # cls_logits = self.classification_head(global_feature)
         feat = F.normalize(global_feature, dim=-1)                  # [B, D]
         proto = F.normalize(class_proto, dim=-1)                 # [B, C, D]
         cls_logits = self.scale * torch.einsum('bd,bcd->bc', feat, proto)
         cls_similarities = cls_logits / self.scale 
-        # 原型相似度
+        # Prototype similarity.
         # cls_similarities = F.cosine_similarity(
         #     global_feature.unsqueeze(1),
         #     class_proto.unsqueeze(0),
@@ -333,13 +333,13 @@ class ClassificationModule_v3(nn.Module):
         self.num_heads = num_heads
         self.num_classes = num_classes
         
-        # 分类原型
+        # Class prototypes.
         self.class_prototypes = nn.Parameter(torch.randn(num_classes, embed_dim))
 
-        # 差分增强模块【todo】
+        # Difference enhancement module (TODO).
         # self.differential_enhance = DifferentialEnhancement_v1_Block(embed_dim)
         
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -355,14 +355,14 @@ class ClassificationModule_v3(nn.Module):
             nn.Sigmoid()
         )
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim // 2),
             nn.GELU(),
             nn.Linear(embed_dim // 2, embed_dim)
         )
         
-        # 分类头
+        # Classification head.
         self.classification_head = nn.Sequential(
             nn.LayerNorm(embed_dim),
             nn.Linear(embed_dim, embed_dim // 2),
@@ -372,40 +372,40 @@ class ClassificationModule_v3(nn.Module):
         )
       
         
-        # 自定义初始化函数
+        # Custom initialization.
         def init_weights(m):
             if isinstance(m, nn.Linear):
-                if m.out_features == self.num_classes:  # 检查是否为最后一层
-                    nn.init.normal_(m.weight, std=2.0)  # 使用更大的标准差初始化
+                if m.out_features == self.num_classes:  # Check for the final layer.
+                    nn.init.normal_(m.weight, std=2.0)  # Initialize with a larger standard deviation.
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
 
-        # 应用初始化到分类头的最后一层
+        # Initialize the final classification layer.
         self.classification_head[-1].apply(init_weights)
 
     def fuse_feature(self, feat_list):
         return torch.stack(feat_list, dim=1).mean(dim=1)
 
     def forward(self, en_list, anomaly_prototypes=None, encoder_num_register_tokens=0, remove_class_token=False):
-        # 特征处理
+        # Process features.
         if remove_class_token:
             en_list_processed = [e[:, 1 + encoder_num_register_tokens:, :] for e in en_list]
         else:
-            en_list_processed = en_list   #9,10,11层feature
+            en_list_processed = en_list   # Features from layers 9, 10, and 11.
         
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # 全局特征提取
+        # Extract global features.
         if remove_class_token:
             global_feature = adapted_features.mean(dim=1)
         else:
             global_feature = adapted_features[:, 0, :]
         
-        # 分类输出
+        # Classification output.
         cls_logits = self.classification_head(global_feature)
        
-        # # 原型相似度
+        # # Prototype similarity.
         # cls_similarities = F.cosine_similarity(
         #     global_feature.unsqueeze(1),
         #     class_proto.unsqueeze(0),
@@ -415,7 +415,7 @@ class ClassificationModule_v3(nn.Module):
         
         return cls_logits
 
-#v1_v2相比，v2增加归一化特征和原型
+# V2 adds normalized features and prototypes.
 class AnomalyDetectionModule_v2(nn.Module):
     def __init__(self, embed_dim, num_heads, inp_num, target_layers, 
                  fuse_layer_encoder, fuse_layer_decoder, remove_class_token=False):
@@ -427,10 +427,10 @@ class AnomalyDetectionModule_v2(nn.Module):
         self.fuse_layer_decoder = fuse_layer_decoder
         self.remove_class_token = remove_class_token
         
-        # 异常检测原型
+        # Anomaly prototypes.
         self.anomaly_prototypes = nn.Parameter(torch.randn(inp_num, embed_dim))
                 
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -442,14 +442,14 @@ class AnomalyDetectionModule_v2(nn.Module):
             Mlp(embed_dim, embed_dim * 4, embed_dim, drop=0.)
         ])
         
-        # 解码器
+        # Decoder.
         self.decoder = nn.ModuleList([
             Prototype_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                           qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
             for _ in range(8)
         ])
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.GELU(),
@@ -476,13 +476,13 @@ class AnomalyDetectionModule_v2(nn.Module):
             en_list_processed = en_list
         
         
-        # 特征融合
+        # Fuse features.
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # 原型聚合
+        # Aggregate prototypes.
         agg_prototype = self.anomaly_prototypes
-        #新增加归一化特征和原型
+        # Add normalized features and prototypes.
         agg_prototype = F.normalize(agg_prototype, dim=-1)
         adapted_features = F.normalize(adapted_features, dim=-1)
         
@@ -491,19 +491,19 @@ class AnomalyDetectionModule_v2(nn.Module):
         
         gather_loss = self.gather_loss(fused_features, agg_prototype)
         
-        # Bottleneck处理
+        # Bottleneck.
         bottleneck_features = adapted_features
         for blk in self.bottleneck:
             bottleneck_features = blk(bottleneck_features)
         
-        # 解码器
+        # Decoder.
         de_list = []
         for blk in self.decoder:
             bottleneck_features = blk(bottleneck_features, agg_prototype)
             de_list.append(bottleneck_features)
         de_list = de_list[::-1]
         
-        # 特征重构
+        # Reconstruct features.
         en = [self.fuse_feature([en_list_processed[idx] for idx in idxs]) for idxs in self.fuse_layer_encoder]
         de = [self.fuse_feature([de_list[idx] for idx in idxs]) for idxs in self.fuse_layer_decoder]
 
@@ -511,13 +511,13 @@ class AnomalyDetectionModule_v2(nn.Module):
             en = [e[:, 1 + encoder_num_register_tokens:, :] for e in en]
             de = [d[:, 1 + encoder_num_register_tokens:, :] for d in de]
         
-        # 恢复空间结构
+        # Restore spatial layout.
         en = [e.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for e in en]
         de = [d.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for d in de]
         
         return en, de, gather_loss, agg_prototype
 
-#v1_v3新增recon_loss+norm
+# V3 adds reconstruction loss and normalization.
 class AnomalyDetectionModule_v3(nn.Module):
     def __init__(self, embed_dim, num_heads, inp_num, target_layers, 
                  fuse_layer_encoder, fuse_layer_decoder, remove_class_token=False):
@@ -529,10 +529,10 @@ class AnomalyDetectionModule_v3(nn.Module):
         self.fuse_layer_decoder = fuse_layer_decoder
         self.remove_class_token = remove_class_token
         
-        # 异常检测原型
+        # Anomaly prototypes.
         self.anomaly_prototypes = nn.Parameter(torch.randn(inp_num, embed_dim))
         
-        # 聚合模块
+        # Aggregation module.
         self.aggregation = nn.ModuleList([
             Aggregation_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                             qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
@@ -544,14 +544,14 @@ class AnomalyDetectionModule_v3(nn.Module):
             Mlp(embed_dim, embed_dim * 4, embed_dim, drop=0.)
         ])
         
-        # 解码器
+        # Decoder.
         self.decoder = nn.ModuleList([
             Prototype_Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=4.,
                           qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-8))
             for _ in range(8)
         ])
         
-        # 特征适配器
+        # Feature adapter.
         self.feature_adapter = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.GELU(),
@@ -578,13 +578,13 @@ class AnomalyDetectionModule_v3(nn.Module):
             en_list_processed = en_list
         
         
-        # 特征融合
+        # Fuse features.
         fused_features = self.fuse_feature(en_list_processed)
         adapted_features = self.feature_adapter(fused_features)
         
-        # 原型聚合
+        # Aggregate prototypes.
         agg_prototype = self.anomaly_prototypes
-        #归一化
+        # Normalize.
         agg_prototype = F.normalize(agg_prototype, dim=-1)
         adapted_features = F.normalize(adapted_features, dim=-1)
 
@@ -593,19 +593,19 @@ class AnomalyDetectionModule_v3(nn.Module):
         
         gather_loss = self.gather_loss(adapted_features, agg_prototype)
         
-        # Bottleneck处理
+        # Bottleneck.
         bottleneck_features = adapted_features
         for blk in self.bottleneck:
             bottleneck_features = blk(bottleneck_features)
         
-        # 解码器
+        # Decoder.
         de_list = []
         for blk in self.decoder:
             bottleneck_features = blk(bottleneck_features, agg_prototype)
             de_list.append(bottleneck_features)
         de_list = de_list[::-1]
         
-        # 特征重构
+        # Reconstruct features.
         en = [self.fuse_feature([en_list_processed[idx] for idx in idxs]) for idxs in self.fuse_layer_encoder]
         de = [self.fuse_feature([de_list[idx] for idx in idxs]) for idxs in self.fuse_layer_decoder]
 
@@ -613,11 +613,11 @@ class AnomalyDetectionModule_v3(nn.Module):
             en = [e[:, 1 + encoder_num_register_tokens:, :] for e in en]
             de = [d[:, 1 + encoder_num_register_tokens:, :] for d in de]
         
-        # 恢复空间结构
+        # Restore spatial layout.
         en = [e.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for e in en]
         de = [d.permute(0, 2, 1).reshape([B, -1, side, side]).contiguous() for d in de]
 
-        recon_loss = F.l1_loss(torch.stack(de, dim=1), torch.stack(en, dim=1))  #新增recon_loss
+        recon_loss = F.l1_loss(torch.stack(de, dim=1), torch.stack(en, dim=1))  # Reconstruction loss.
         gather_loss = gather_loss + 0.5 * recon_loss
         
         return en, de, gather_loss, agg_prototype

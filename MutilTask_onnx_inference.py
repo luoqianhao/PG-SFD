@@ -25,7 +25,7 @@ def load_onnx_session(args):
     return sess, input_name, output_names
 
 def preprocess_image(image_path, input_size=448, crop_size=448):
-    # 和训练代码保持一样的数据预处理
+    # Match the training preprocessing.
     transform = transforms.Compose([
         transforms.Resize((input_size, input_size)),
         transforms.CenterCrop(crop_size),
@@ -52,7 +52,7 @@ def visualize_results(img_tensor, img_orig, anomaly_map, save_path=None, stronge
     # anomaly_map[180:205,200:220] = anomaly_map.min()
     print("anomaly_map max:", anomaly_map.max())
     # anomaly_map_max = anomaly_map.max()
-    if anomaly_map_max > 0.04: # 可能是异常值,否则zero
+    if anomaly_map_max > 0.04: # Treat as anomalous; otherwise use zero.
         anomaly_map = (anomaly_map - anomaly_map.min()) / (anomaly_map.max() - anomaly_map.min() + 1e-8)
     else:
         anomaly_map = anomaly_map #np.zeros_like(anomaly_map)
@@ -146,14 +146,14 @@ def process_single_image(args, image_path, sess, input_name, output_names):
     g_loss = torch.from_numpy(g_loss_np).to(torch.float32)   #gather_loss
     cls_logits = torch.from_numpy(cls_logits_np).to(torch.float32)   #cls_logits
     
-    # 1. 输出异常结果
+    # 1. Anomaly output.
     anomaly_map, _ = test_global_cosine_hm_percent(en_list, de_list)
     # anomaly_map, _ = test_global_cosine_hm_percent_enonly(en_list)
-    global_score = g_loss.item()  # 或者其他图像级得分
+    global_score = g_loss.item()  # Or another image-level score.
     print(anomaly_map.shape)
     print(f"Global score : {global_score:.4f}")
 
-    # 2. 输出分类结果
+    # 2. Classification output.
     cls_pred = torch.argmax(cls_logits, dim=-1)
     strongest_prototype_id, strongest_response = cls_pred.item(), cls_logits[0][cls_pred].item()
     label_pred = label_mapping[strongest_prototype_id]
@@ -216,7 +216,7 @@ if __name__ == '__main__':
     
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    #加载onnx session
+    # Load the ONNX session.
     sess, input_name, output_names = load_onnx_session(args)
 
     # Determine if input is a single image or folder

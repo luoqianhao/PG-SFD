@@ -44,6 +44,13 @@ def _list_images(folder: str):
         paths += glob.glob(os.path.join(folder, f"*{ext}"))
     return sorted(paths)
 
+
+def _mvtec_sample_stem(path: str) -> str:
+    """Return the shared stem for a MVTec test image and its ``*_mask`` GT."""
+    stem = Path(path).stem
+    return stem[:-5] if stem.endswith("_mask") else stem
+
+
 class MVTecDataset_v2(torch.utils.data.Dataset):
     def __init__(self, root, transform, gt_transform, phase='test', mode='test', global_cls_map=None):
         self.transform = transform
@@ -59,20 +66,20 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
             self.img_path = os.path.join(root, 'test')
             self.gt_path = os.path.join(root, 'ground_truth')
         
-        # 构建类别映射
+        # Build the class map.
         self.cls_name_to_id = self._build_class_mapping(global_cls_map)
         self.img_paths, self.gt_paths, self.labels, self.types = self.load_dataset()
 
     def _build_class_mapping(self, global_cls_map=None):
-        """构建缺陷类别名称到ID的映射"""
-        # 优先使用传入的全局映射
+        """Build the defect-name-to-ID map."""
+        # Prefer the supplied global map.
         if global_cls_map is not None:
             return global_cls_map
         
-        # 否则从数据目录构建映射
-        data_dir = os.path.join(self.root, 'train')  # 使用train目录构建映射
+        # Otherwise, build the map from the data directory.
+        data_dir = os.path.join(self.root, 'train')  # Build the map from the train directory.
         if not os.path.isdir(data_dir):
-            data_dir = os.path.join(self.root, 'test')  # 如果没有train目录，使用test目录
+            data_dir = os.path.join(self.root, 'test')  # Fall back to the test directory.
         
         defect_names = []
         for name in sorted(os.listdir(data_dir)):
@@ -80,7 +87,7 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
             if os.path.isdir(ddir) and name != 'good':
                 defect_names.append(name)
         
-        # 正常样本为0，缺陷类别从1开始编号
+        # Use 0 for normal and 1..K for defects.
         return {n: (i+1) for i, n in enumerate(sorted(set(defect_names)))}
 
     def load_dataset(self):
@@ -101,13 +108,13 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
             
             if self.phase == 'train':
                 if defect_type == 'good':
-                    # 正常样本，标签为0
+                    # Normal sample, label 0.
                     img_tot_paths.extend(img_paths)
                     gt_tot_paths.extend([0] * len(img_paths))
                     tot_labels.extend([0] * len(img_paths))
                     tot_types.extend(['good'] * len(img_paths))
                 else:
-                    # 缺陷样本，根据模式决定是否包含
+                    # Include defective samples according to mode.
                     if self.mode == 'train_with_anomalies':
                         label = self.cls_name_to_id.get(defect_type, 1)
                         img_tot_paths.extend(img_paths)
@@ -116,18 +123,18 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
                         tot_types.extend([defect_type] * len(img_paths))
             else:  # test phase
                 if defect_type == 'good':
-                    # 测试集的正常样本
+                    # Normal test sample.
                     img_tot_paths.extend(img_paths)
                     gt_tot_paths.extend([0] * len(img_paths))
                     tot_labels.extend([0] * len(img_paths))
                     tot_types.extend(['good'] * len(img_paths))
                 else:
-                    # 测试集的缺陷样本
+                    # Defective test sample.
                     gdir = os.path.join(self.gt_path, defect_type)
                     gt_map = {}
                     if os.path.isdir(gdir):
                         for gp in _list_images(gdir):
-                            gt_map[Path(gp).stem] = gp
+                            gt_map[_mvtec_sample_stem(gp)] = gp
                     
                     label = self.cls_name_to_id.get(defect_type, 1)
                     for ip in img_paths:
@@ -147,19 +154,19 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path, gt, label, img_type = self.img_paths[idx], self.gt_paths[idx], int(self.labels[idx]), self.types[idx]
         img = Image.open(img_path).convert('RGB')
-        img = self.transform(img)  # 这里transform应该将PIL Image转换为torch.Tensor
+        img = self.transform(img)  # transform should convert PIL images to torch.Tensor.
         
-        # 现在img应该是torch.Tensor
+        # img is now a torch.Tensor.
         if label == 0 or gt == 0:
             H, W = img.shape[1], img.shape[2]
             gt = torch.zeros([1, H, W], dtype=torch.float32)
         else:
             gt_img = Image.open(gt)
-            gt = self.gt_transform(gt_img)  # 这里gt_transform也应该返回torch.Tensor
+            gt = self.gt_transform(gt_img)  # gt_transform should return a torch.Tensor.
 
-        # 检查尺寸是否匹配
+        # Check spatial dimensions.
         if img.shape[1:] != gt.shape[1:]:
-            # 如果不匹配，调整gt的尺寸
+            # Resize GT if needed.
             gt = F.interpolate(gt.unsqueeze(0), size=img.shape[1:], mode='nearest').squeeze(0)
         
         return img, gt, label, img_path
@@ -170,8 +177,8 @@ class MVTecDataset_v2(torch.utils.data.Dataset):
 class MVTecTrainWithAnomalies(torch.utils.data.Dataset):
     """
     mode:
-      - 'train'                : 仅正常样本 label=0
-      - 'train_with_anomalies' : 正常(0) + 各缺陷(1..K)
+      - 'train'                : normal samples only, label=0
+      - 'train_with_anomalies' : normal (0) and defects (1..K)
     """
     def __init__(self, root, transform=None, gt_transform=None, phase='train', mode='train', global_cls_map=None):
         self.root = root
@@ -224,8 +231,8 @@ class MVTecTrainWithAnomalies(torch.utils.data.Dataset):
 class MVTecDataset(torch.utils.data.Dataset):
     """
     phase: 'train' or 'test'
-      - train: good=0, defect=1（训练阶段一般不使用 GT，返回 0 mask）
-      - test : 严格按文件名 stem 匹配 test 与 ground_truth
+      - train: good=0, defect=1; returns a zero mask
+      - test : match test and ground_truth by filename stem
     """
     def __init__(self, root, transform, gt_transform, phase):
         self.transform = transform
@@ -279,7 +286,7 @@ class MVTecDataset(torch.utils.data.Dataset):
                     gt_map = {}
                     if os.path.isdir(gdir):
                         for gp in _list_images(gdir):
-                            gt_map[Path(gp).stem] = gp
+                            gt_map[_mvtec_sample_stem(gp)] = gp
                     for ip in img_paths:
                         stem = Path(ip).stem
                         gpath = gt_map.get(stem, 0)
@@ -427,6 +434,4 @@ class RealIADDataset(torch.utils.data.Dataset):
         assert img.size()[1:] == gt.size()[1:], "image.size != gt.size !!!"
 
         return img, gt, label, img_path
-
-
 
