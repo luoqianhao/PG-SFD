@@ -1,4 +1,4 @@
-# PSG-FSD  
+# PG-FSD  
  [**CVPR 2026**] [**Dual-Prototype-Guided Multi-task Learning for Unsupervised Anomaly Detection and Classification**](https://openaccess.thecvf.com/content/CVPR2026/papers/Luo_Dual-Prototype-Guided_Multi-task_Learning_for_Unsupervised_Anomaly_Detection_and_Classification_CVPR_2026_paper.pdf)
 
  ## Introduction 
